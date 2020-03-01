@@ -1,12 +1,13 @@
 # -*- coding:utf-8 -*-
 import os
 import re
-import jieba
-import numpy as np
 from tqdm import tqdm
 import pandas as pd
 from collections import defaultdict
 import jieba
+import argparse
+import json
+from config import category
 
 tqdm.pandas(desc='apply')
 
@@ -14,6 +15,16 @@ tqdm.pandas(desc='apply')
 stopwords = pd.read_csv('./data/stopwords.txt', sep='\t', header=None, names=['stopword'],
                         quoting=3, encoding='utf-8', engine='python')
 STOPWORD = set(stopwords.stopword.values)
+
+
+# 加载同义词林
+def read_synonym_dict():
+    with open('./data/synonym_forest.dict', 'r', encoding='utf-8')as  f:
+        synonsym_forest = json.load(f)
+    return synonsym_forest
+
+
+SYNONYM_FOREST = read_synonym_dict()
 
 
 def genrate_k_fold_index(category, group: dict, n=5):
@@ -37,6 +48,7 @@ def matcher(string):
 
 def cut_sentences(sentences):
     """ 切词 ，默认连续非中文字符串为一个词 不包括空格"""
+    sentences = sentences.replace(",", "，")
     splits = sentences.split("\t")
     total_words = []
     for sen in splits:
@@ -60,16 +72,13 @@ def cut_sentences(sentences):
 
 
 def df_to_csv(file, df):
-    df.to_csv(file, sep=str(","), header=None, index=False, encoding='utf-8')
+    df.to_csv(file, sep=str(","), header=True, index=False, encoding='utf-8')
     print('saved ...')
 
 
 def read_df_from_csv(file, names=None):
     # 重新载入数据
-    if names is None:
-        names = ['ID', 'Age', 'Gender', 'Education', 'age_kfold_index', 'gender_kfold_index', 'education_kfold_index',
-                 'query_num', 'query_max_len', 'query_ave_len', 'query_min_len', 'blank_rate', 'english_rate', 'Query']
-    data_df = pd.read_csv(file, sep=',', header=None, names=names)
+    data_df = pd.read_csv(file, sep=',', header=0, encoding='utf-8')
     return data_df
 
 
@@ -119,7 +128,26 @@ def query_stat(querys):
     return stat_list
 
 
-def _process(querys):
+def replace_synonym_word(querys):
+    sens = []
+    for single_query in querys.split('\t\t'):
+        single_splits = single_query.split('\t')
+        if len(single_splits) < 2:
+            continue
+        cur_words = []
+        for word in single_splits:
+            if word in STOPWORD:
+                continue
+            cur_words.append(word)
+        if len(cur_words) < 2:
+            continue
+        cur_words = [SYNONYM_FOREST[w] if w in SYNONYM_FOREST else w for w in cur_words]
+
+        sens.extend(cur_words + ['。'])
+    return "\t".join(sens)
+
+
+def remove_stopword(querys):
     ''' 去停用词'''
     words = []
     for single_query in querys.split('\t\t'):
@@ -136,19 +164,8 @@ def preprocess(file):
     age_subclass_dict = defaultdict(int)
     gender_subclass_dict = defaultdict(int)
     education_subclass_dict = defaultdict(int)
+    df = pd.read_csv(file, sep=',', encoding='utf-8', header=0)
 
-    names = ['ID', 'Age', 'Gender', 'Education', 'Query']
-
-    data_dtype = {'ID': np.str, "Age": np.int16, 'Gender': np.int16, 'Education': np.int16, 'Query': np.str}
-    df = pd.read_csv(file, sep='###__###', header=None, names=names, dtype=data_dtype, encoding='utf-8',
-                     engine='python')
-
-    df['age_kfold_index'] = df['Age'].progress_apply(lambda x: genrate_k_fold_index(x, age_subclass_dict))
-    df['gender_kfold_index'] = df['Gender'].progress_apply(lambda x: genrate_k_fold_index(x, gender_subclass_dict))
-    df['education_kfold_index'] = df['Education'].progress_apply(
-        lambda x: genrate_k_fold_index(x, education_subclass_dict))
-    # 分词
-    df['Query'] = df['Query'].progress_apply(lambda x: cut_sentences(x))
     # 特征生成
     df['query_stat'] = df['Query'].progress_apply(lambda x: query_stat(x))
     df['query_num'] = df['query_stat'].progress_apply(lambda x: x[0])
@@ -158,15 +175,26 @@ def preprocess(file):
     df['blank_rate'] = df['query_stat'].progress_apply(lambda x: x[4])
     df['english_rate'] = df['query_stat'].progress_apply(lambda x: x[5])
     # Query去停用词,且空格化
-    df['Query'] = df['Query'].progress_apply(lambda x: _process(x))
-    names = ['ID', 'Age', 'Gender', 'Education', 'age_kfold_index', 'gender_kfold_index', 'education_kfold_index',
-             'query_num', 'query_max_len', 'query_ave_len', 'query_min_len', 'blank_rate', 'english_rate', 'Query']
-    df = df[names]
+    del df['query_stat']
+    df['Query'] = df['Query'].progress_apply(lambda x: replace_synonym_word(x))
     return df
 
 
+def main():
+    import time
+    start = time.time()
+    parser = argparse.ArgumentParser(description='preprocess parser')
+    parser.add_argument('-i', '--inputfile', required=True, help='input file')
+    parser.add_argument('-o', '--outfile', default='./data/preprocess.csv', help='output file')
+    args = parser.parse_args()
+    preprocess_df = preprocess(args.inputfile)
+    df_to_csv(args.outfile, preprocess_df)
+    """
+    python data_utils.py -i ./templete/preprocess.csv -o ./data/preprocess.csv
+    
+    python data_utils.py -i ./templete/test_preprocess.csv -o ./data/test_preprocess.csv
+    """
+
+
 if __name__ == '__main__':
-    file = './data/train.csv'
-    preprocess_df = preprocess(file)
-    preprocess_file = './data/preprocessed.csv'
-    df_to_csv(preprocess_file, preprocess_df)
+    main()
