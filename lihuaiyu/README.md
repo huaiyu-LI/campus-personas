@@ -1,3 +1,4 @@
+# 基于自然语言处理的用户画像
 ## 主要依赖的及版本
 * jieba
 * scikit-learn
@@ -17,7 +18,7 @@
  
 
 ### 模型构建和评估
-* 尝试使用了MultinomialNB 进行建模分析，分别对Age，Gender，Education 进行5折交叉检验，
+* 利用fasttext+xgboost 进行数据建模分析，分别对Age，Gender，Education 进行5折交叉检验，
 模型检验准确度：
  <table>
         <tr>
